@@ -28,10 +28,10 @@ func NewAttenuateCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&attenuator.token, "token", "", "sets token for attenuation")
-	cmd.Flags().StringArrayVar(&attenuator.resource, "resource", nil, "sets resources for attenuation")
-	cmd.Flags().StringArrayVar(&attenuator.namespace, "namespace", nil, "sets namespaces for attenuation")
-	cmd.Flags().StringArrayVar(&attenuator.name, "name", nil, "sets names for attenuation")
-	cmd.Flags().StringArrayVar(&attenuator.verb, "verb", nil, "sets verbs for attenuation")
+	cmd.Flags().StringArrayVar(&attenuator.resource, "resource", []string{}, "sets resources for attenuation")
+	cmd.Flags().StringArrayVar(&attenuator.namespace, "namespace", []string{}, "sets namespaces for attenuation")
+	cmd.Flags().StringArrayVar(&attenuator.name, "name", []string{}, "sets names for attenuation")
+	cmd.Flags().StringArrayVar(&attenuator.verb, "verb", []string{}, "sets verbs for attenuation")
 
 	return cmd
 }
@@ -55,46 +55,72 @@ func (a attenuator) Attenuate() ([]byte, error) {
 		return nil, fmt.Errorf("unmarshalling token: %w", err)
 	}
 
-	var blockString strings.Builder
+	checks := []biscuit.Check{}
 
 	if len(a.resource) > 0 {
-		blockString.WriteString(fmt.Sprintf("check if k8s:resource(%q)", a.resource[0]))
+		var checkString strings.Builder
+		checkString.WriteString(fmt.Sprintf("check if k8s:resource(%q)", a.resource[0]))
 		for _, res := range a.resource[1:] {
-			blockString.WriteString(fmt.Sprintf("or k8s:resource(%q)", res))
+			checkString.WriteString(fmt.Sprintf(" or k8s:resource(%q)", res))
 		}
-		blockString.WriteString(";\n")
+
+		check, err := parser.FromStringCheck(checkString.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse resource check: %v", err)
+		}
+
+		checks = append(checks, check)
 	}
 
 	if len(a.namespace) > 0 {
-		blockString.WriteString(fmt.Sprintf("check if k8s:namespace(%q)", a.namespace[0]))
+		var checkString strings.Builder
+		checkString.WriteString(fmt.Sprintf("check if k8s:namespace(%q)", a.namespace[0]))
 		for _, res := range a.namespace[1:] {
-			blockString.WriteString(fmt.Sprintf("or k8s:namespace(%q)", res))
+			checkString.WriteString(fmt.Sprintf(" or k8s:namespace(%q)", res))
 		}
-		blockString.WriteString(";\n")
+
+		check, err := parser.FromStringCheck(checkString.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse namespace check: %v", err)
+		}
+
+		checks = append(checks, check)
 	}
 
 	if len(a.name) > 0 {
-		blockString.WriteString(fmt.Sprintf("check if k8s:name(%q)", a.name[0]))
+		var checkString strings.Builder
+		checkString.WriteString(fmt.Sprintf("check if k8s:name(%q)", a.name[0]))
 		for _, res := range a.name[1:] {
-			blockString.WriteString(fmt.Sprintf("or k8s:name(%q)", res))
+			checkString.WriteString(fmt.Sprintf(" or k8s:name(%q)", res))
 		}
-		blockString.WriteString(";\n")
+
+		check, err := parser.FromStringCheck(checkString.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse name check: %v", err)
+		}
+
+		checks = append(checks, check)
 	}
 
 	if len(a.verb) > 0 {
-		blockString.WriteString(fmt.Sprintf("check if k8s:verb(%q)", a.verb[0]))
+		var checkString strings.Builder
+		checkString.WriteString(fmt.Sprintf("check if k8s:verb(%q)", a.verb[0]))
 		for _, res := range a.verb[1:] {
-			blockString.WriteString(fmt.Sprintf("or k8s:verb(%q)", res))
+			checkString.WriteString(fmt.Sprintf(" or k8s:verb(%q)", res))
 		}
-		blockString.WriteString(";\n")
+
+		check, err := parser.FromStringCheck(checkString.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse verb check: %v", err)
+		}
+
+		checks = append(checks, check)
 	}
 
 	blockBuilder := token.CreateBlock()
-	block, err := parser.FromStringBlock(blockString.String())
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse block: %v", err)
+	for _, check := range checks {
+		blockBuilder.AddCheck(check)
 	}
-	blockBuilder.AddBlock(block)
 
 	b2, err := token.Append(rand.Reader, blockBuilder.Build())
 	if err != nil {

@@ -11,6 +11,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.AddCommand(NewGenTokenCommand())
 	cmd.AddCommand(NewAttenuateCommand())
 	cmd.AddCommand(NewAuthorizeCommand())
+	cmd.AddCommand(NewRunCommand())
 
 	return cmd
 }

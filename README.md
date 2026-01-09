@@ -7,6 +7,8 @@ in Kubernetes to enable attenuation behaviors.
 
 ## Setup
 
+TODO: Document webhook run mode.
+
 ### Clone the repo
 
 ```sh
