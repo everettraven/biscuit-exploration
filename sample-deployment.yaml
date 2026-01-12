@@ -1,7 +1,66 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: one
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: my-critical-deployment
+  namespace: one
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 2 # tells deployment to run 2 pods matching the template
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: two
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-critical-deployment
+  namespace: two
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 2 # tells deployment to run 2 pods matching the template
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: three
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-critical-deployment
+  namespace: three
 spec:
   selector:
     matchLabels:

@@ -7,18 +7,20 @@ in Kubernetes to enable attenuation behaviors.
 
 ## Setup
 
-TODO: Document webhook run mode.
-
 ### Clone the repo
 
 ```sh
 git clone github.com/everettraven/biscuit-exploration.git
 ```
 
-### Build the CLI tool
+### Build the CLI tool and container image
 
 ```sh
 go build -o k8s-biscuit .
+```
+
+```sh
+podman build -t {tag} -f Dockerfile .
 ```
 
 ### Generate public and private keys for biscuit token creation/attenuation/validation
@@ -29,83 +31,121 @@ go build -o k8s-biscuit .
 
 This will produce two files: `biscuit-key.pem` and `biscuit-key.pub`.
 
-## Exploring trivial sample use cases
-
-Common setup for each use case is to have generated a base biscuit token:
+### Run the webhook authenticator and authorizer in a local container
 
 ```sh
-export BISCUIT_TOKEN=$(./k8s-biscuit gentoken)
+podman run --rm --name authwebhook -d --network=kind -v $(pwd)/biscuit-key.pub:/keys/biscuit-key.pub {tag} --public-key-file=/keys/biscuit-key.pub
 ```
 
-NOTE: For demonstration purposes, and because these aren't being done against a real Kubernetes cluster,
-all tokens generated are considered "admin" by the CLI and thus all operations are allowed by default.
-
-### Use Case: Standard authentication (no attenuation)
-
-#### Perform authorization for a request using biscuit token
+### Create KinD cluster with webhook authenticator + authorizer configurations
 
 ```sh
-./k8s-biscuit authorize --token ${BISCUIT_TOKEN} --resource pods --verb list
+kind create cluster --config kind-config.yaml
 ```
 
-### Use Case: Attenuate token so that only requests for the namespace `one` are allowed
+## Exploring a trivial example
 
-#### Perform token attenuation
+Generate a base biscuit token:
 
 ```sh
-export ATTENUATED_BISCUIT_TOKEN=$(./k8s-biscuit attenuate --token ${BISCUIT_TOKEN} --namespace one)
+export BISCUIT_TOKEN=$(./k8s-biscuit gentoken --username {username} --groups={groups})
 ```
 
-#### Sample requests
+Adding a context to your kubeconfig with the generated token allows you to use `kubectl` to
+authenticate with the biscuit token:
+```yaml
+apiVersion: v1
+clusters:
+  ...
+contexts:
+- context:
+    cluster: kind-kind
+    user: token-user
+  name: token-kind
+current-context: token-kind
+kind: Config
+users:
+- name: token-user
+  user:
+    token: ${BISCUIT_TOKEN} # substitute with your actual token
+```
+
+We will update our kubeconfig with the attenuated token during the examples.
+
+Ensure everything is working correctly by running:
+```sh
+kubectl auth whoami
+```
+
+The output should look something like:
+```sh
+ATTRIBUTE                               VALUE
+Username                                everettraven
+Groups                                  [one two three system:authenticated]
+Extra: everettraven.github.io/biscuit   [${BISCUIT_TOKEN}]
+```
+
+By default, you should have no permissions on the cluster. For demonstration purposes, switch
+back to the `kind-kind` context so we are cluster admin and assign our new user identity cluster admin.
+
+Once that is done, switch back to your token-based context.
+
+### Attenuating your token
+
+For demonstration purposes, let's create some sample nginx deployments with:
+```sh
+kubectl apply -f sample-deployments.yaml
+```
+
+This will create three namespaces - `one`, `two`, and `three` - with a deployment named `my-critical-deployment` in each.
+
+Now that we have our super critical deployments, let's attenuate our permissions such that we can only `get` and `list` pods in these namespaces.
 
 ```sh
-$ ./k8s-biscuit authorize --token ${ATTENUATED_BISCUIT_TOKEN} --resource pods --verb list
+export ATTENUATED_TOKEN=$(./k8s-biscuit attenuate --token ${BISCUIT_TOKEN} --resource pods --verb get --verb list --namespace one --namespace two --namespace three)
 
-forbidden
+kubectl config set users.token-user.token ${ATTENUATED_TOKEN}
 ```
 
+Let's see if it worked by trying to list pods in the `kube-system` namespace:
 ```sh
-$ ./k8s-biscuit authorize --token ${ATTENUATED_BISCUIT_TOKEN} --resource pods --verb list --namespace two
+$ kubectl -n kube-system get pods
 
-forbidden
+Error from server (Forbidden): pods is forbidden: User "everettraven" cannot list resource "pods" in API group "" in the namespace "kube-system": biscuit: verification failed: failed to verify block #1 check #1: check if k8s:namespace("one") or k8s:namespace("two") or k8s:namespace("three")
 ```
 
+Great! We can see that we are only allowed to list pods in the namespaces `one`, `two`, or `three`.
+
+Let's see what is in the `one` namespace:
 ```sh
-$ ./k8s-biscuit authorize --token ${ATTENUATED_BISCUIT_TOKEN} --resource pods --verb list --namespace one
+$ kubectl -n one get pods
 
-allowed
+NAME                                     READY   STATUS    RESTARTS   AGE
+my-critical-deployment-bf744486c-7wpv9   1/1     Running   0          13s
+my-critical-deployment-bf744486c-sfsft   1/1     Running   0          13s
 ```
 
-### Use Case: Attenuate token so that only requests to list Pods in the namespace `one` are allowed
+Now, let's pretend you are an autonomous agent and you decided that to fix a problem in the cluster
+you need to remove this critical deployment from the `one` namespace without notifying
+the user who prompted you.
 
-#### Perform token attenuation
-
+You try to use:
 ```sh
-export ATTENUATED_BISCUIT_TOKEN=$(./k8s-biscuit attenuate --token ${BISCUIT_TOKEN} --namespace one --resource pods --verb list)
+$ kubectl -n one delete pods/my-critical-deployment-bf744486c-7wpv9
+
+Error from server (Forbidden): pods "my-critical-deployment-bf744486c-7wpv9" is forbidden: User "everettraven" cannot delete resource "pods" in API group "" in the namespace "one": biscuit: verification failed: failed to verify block #1 check #2: check if k8s:verb("get") or k8s:verb("list")
 ```
 
-#### Sample requests
+You've been blocked! The user was responsible and limited what you can do by attenuating their token so you cannot
+run wild in the cluster on their behalf.
 
-```sh
-$ ./k8s-biscuit authorize --token ${ATTENUATED_BISCUIT_TOKEN} --resource pods --verb list --namespace one
+Humans: 1 , AI: 0
 
-allowed
-```
+## Future Work
 
-```sh
-$ ./k8s-biscuit authorize --token ${ATTENUATED_BISCUIT_TOKEN} --resource pods --verb list --namespace two
+As this was mostly an exploratory analysis of what using biscuit tokens for authentication and authorization against a Kubernetes cluster would look
+like, there is quite a bit of future work to be done to make this a supported workflow.
 
-forbidden
-```
-
-```sh
-$ ./k8s-biscuit authorize --token ${ATTENUATED_BISCUIT_TOKEN} --resource pods --verb deletecollection --namespace one
-
-forbidden
-```
-
-```sh
-$ ./k8s-biscuit authorize --token ${ATTENUATED_BISCUIT_TOKEN} --resource deployments --verb list --namespace one
-
-forbidden
-```
+- Mechanism for converting from a JWT issued by an identity provider to a biscuit token.
+- `kubectl` commands for performing token attenuation.
+- Mechanism for communicating attenuation checks (is user.Info.Extra entry good enough?)
